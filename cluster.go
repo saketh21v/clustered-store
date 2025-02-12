@@ -3,13 +3,23 @@ package distcluststore
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/rs/xid"
+)
+
+// Route
+const (
+	V1StateRoute  = "/v1/gossip/state"
+	V1InfoRoute   = "/v1/gossip/info"
+	V1PostMessage = "/v1/gossip/message"
 )
 
 type ClockCmp uint
@@ -25,11 +35,14 @@ type ClusterConfig struct {
 	Nodes              int
 	Hostname           string
 	ClusterHostPattern string // Ex: "cluster-%d.gossip.default.svc.cluster.local:9090", %d will be replaced with ID
+	IP                 net.IP
+	Port               int
 }
 
 type HybridVecClock struct {
-	Vec       []uint64  `json:"vec,omitempty"`
-	Timestamp time.Time `json:"timestamp,omitempty"` // Used for conflict resolution
+	Vec []uint64 `json:"vec,omitempty"`
+	// Timestamp isn't going to be precise, but works for now. Used for conflict resolution
+	Timestamp time.Time `json:"timestamp,omitempty"`
 	mu        *sync.RWMutex
 }
 
@@ -43,9 +56,10 @@ type Cluster struct {
 	clock       HybridVecClock
 	nodes       []Node
 	msgcallback func([]byte)
-	seen        map[string]struct{}
+	state       map[string]struct{}
 	smu         *sync.Mutex
 	nmu         *sync.Mutex
+	client      *http.Client
 }
 
 type Event struct {
@@ -68,9 +82,10 @@ func NewCluster(
 		},
 		msgcallback: onmsgcallback,
 		nodes:       make([]Node, 0, 10),
-		seen:        make(map[string]struct{}),
+		state:       make(map[string]struct{}),
 		smu:         &sync.Mutex{},
 		nmu:         &sync.Mutex{},
+		client:      &http.Client{},
 	}
 	if err := c.discoverNodes(); err != nil {
 		log.Error("ERR_DISCOVER_NODES", "error", err)
@@ -140,13 +155,78 @@ func (c *Cluster) propagate(eTime time.Time, payload []byte) error {
 }
 
 func (c *Cluster) discoverNodes() error {
-	// TODO: @saketh - Implement
+	c.nmu.Lock()
+	defer c.nmu.Unlock()
+	nodes := make([]Node, 0, 10)
+	ips, err := net.LookupIP(c.cfg.Hostname)
+	if err != nil {
+		log.Errorf("Error %s", err)
+		return err
+	}
+	for _, ip := range ips {
+		if ip.String() == c.cfg.IP.String() {
+			continue
+		}
+		res, err := http.Get(fmt.Sprintf("http://%s:%d"+V1InfoRoute, ip, c.cfg.Port))
+		if err != nil {
+			log.Errorf("Error %s", err)
+			continue
+		}
+		nodeInfo := &Node{}
+		bytes, err := io.ReadAll(res.Body)
+		if err != nil {
+			log.Errorf("Error %s", err)
+			continue
+		}
+		if err := json.Unmarshal(bytes, nodeInfo); err != nil {
+			log.Errorf("Error %s", err)
+			continue
+		}
+		nodes = append(nodes, *nodeInfo)
+	}
+	c.nodes = nodes
 	return nil
+}
+func (c *Cluster) updateInitialState() error {
+	log.Info("Starting initial state update")
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	if len(c.nodes) == 0 {
+		return nil
+	}
+	// Fetch state from one random node
+	node1 := rand.Intn(len(c.nodes))
+	s1, err := c.fetchState(c.nodes[node1])
+	if err != nil {
+		log.Error("FETCH_STATE", "error", err)
+	}
+
+	c.state = s1
+	log.Info("Initial state updated")
+	return nil
+}
+
+func (c *Cluster) fetchState(node Node) (map[string]struct{}, error) {
+	url := fmt.Sprintf("http://%s:%d"+V1StateRoute, node.IP.String(), c.cfg.Port)
+	res, err := c.client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	bytes, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	state := make(map[string]struct{})
+	if err := json.Unmarshal(bytes, &state); err != nil {
+		return nil, err
+	}
+	return state, nil
+
 }
 
 func (c *Cluster) onmessage(e Event) {
 	log.Info("EVENT_RECEIED", "event", e)
-	if _, ok := c.seen[e.ID]; ok || e.Source == c.cfg.ID {
+	if _, ok := c.state[e.ID]; ok || e.Source == c.cfg.ID {
 		log.Info("EVENT_RECV_IGNORED", "event", e, "reason", "duplicate")
 		return
 	}

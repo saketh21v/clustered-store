@@ -33,6 +33,22 @@ type WALEntry struct {
 	Source int       `json:"source,omitempty"`
 }
 
+type format int
+
+const (
+	F_JSON format = iota
+	F_GOB
+	F_MSGPACK
+)
+
+func (w WALEntry) serialize(_ format) ([]byte, error) {
+	bs, err := json.Marshal(w)
+	if err != nil {
+		return nil, err
+	}
+	return bs, nil
+}
+
 type Store struct {
 	mu      *sync.RWMutex
 	m       map[string]string
@@ -122,10 +138,7 @@ func (s *Store) Set(key string, val string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.cluster.propagate(now, finishBytes); err != nil {
-		return err
-	}
-	return nil
+	return s.cluster.propagate(now, finishBytes)
 }
 
 func (s *Store) set(
