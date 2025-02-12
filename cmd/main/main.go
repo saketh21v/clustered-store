@@ -16,9 +16,9 @@ import (
 
 // Env constants
 const (
-	PodIP      = "POD_IP"
-	Hostname   = "HOSTNAME"
-	TotalNodes = "TOTAL_NODES"
+	PodIP    = "POD_IP"
+	Hostname = "HOSTNAME"
+	Nodes    = "NODES"
 )
 
 type (
@@ -40,15 +40,17 @@ var store *distcluststore.Store
 func main() {
 	hostname := os.Getenv(Hostname)
 	log.Infof("HOSTNAME %s", hostname)
-	id, err := strconv.Atoi(strings.Split(hostname, "-")[1])
+	parts := strings.Split(hostname, "-")
+	log.Info("PARTS", "parts", parts)
+	id, err := strconv.Atoi(parts[len(parts)-1])
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	nodes := os.Getenv(TotalNodes)
+	nodes := os.Getenv(Nodes)
 	log.Infof("TOTAL_NODES %s", nodes)
 	totalNodes, err := strconv.Atoi(nodes)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	ip := os.Getenv(PodIP)
 	ctx := context.Background()
@@ -70,6 +72,7 @@ func main() {
 	}
 	http.HandleFunc("/v1/kv/update", HandleUpdate)
 	http.HandleFunc("/v1/kv/get/{key}", HandleGet)
+	log.Info("KV_SERVER_STARTING")
 	if err := http.ListenAndServe(":9090", nil); err != nil {
 		log.Fatal(err)
 	}

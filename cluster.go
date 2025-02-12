@@ -167,6 +167,7 @@ func NewCluster(
 		}
 	}()
 	go c.startServer(ctx)
+	log.Info("CLUSTER_READY")
 	return c, nil
 }
 

@@ -96,6 +96,7 @@ func NewStore(
 		return nil, err
 	}
 	wal.Seek(0, io.SeekEnd) // Make sure the file is append only
+	log.Info("Store ready")
 	return s, nil
 }
 
@@ -110,7 +111,6 @@ func (s *Store) loadFromWAL(f *os.File) error {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		bs := scanner.Bytes()
-		log.Infof("Line: %s", string(bs))
 		entry := WALEntry{}
 		if err := json.Unmarshal(bs, &entry); err != nil {
 			log.Info("JSON_UNMARSHALL_ERROR", "error", err)

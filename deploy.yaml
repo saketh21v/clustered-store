@@ -33,7 +33,7 @@ spec:
           ports:
             - containerPort: 9090
           env:
-            - name: TOTAL_NODES
+            - name: NODES
               value: "3"
             - name: POD_IP
               valueFrom:
@@ -74,7 +74,7 @@ spec:
           ports:
             - containerPort: 9090
           env:
-            - name: TOTAL_NODES
+            - name: NODES
               value: "3"
             - name: POD_IP
               valueFrom:
@@ -115,7 +115,7 @@ spec:
           ports:
             - containerPort: 9090
           env:
-            - name: TOTAL_NODES
+            - name: NODES
               value: "3"
             - name: POD_IP
               valueFrom:

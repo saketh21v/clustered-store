@@ -21,7 +21,7 @@ build:
 	GOOS=$(GOOS) GOARCH=$(GOARCH) @go build $(GOFLAGS) -o $(OUTPUT_DIR)/$(APP_NAME) .
 
 run-sample:
-	POD_IP=0.0.0.0 TOTAL_NODES=1 HOSTNAME=gossip-0 go run cmd/main/main.go
+	POD_IP=0.0.0.0 NODES=1 HOSTNAME=dis-gossip-0 go run cmd/main/main.go
 
 
 ## run-(bin): Runs the specified binary
