@@ -3,22 +3,35 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/charmbracelet/log"
+
 	"zeaf.dev/distcluststore"
 )
 
 // Env constants
 const (
-	PodIP    = "POD_IP"
-	Hostname = "HOSTNAME"
-	Nodes    = "NODES"
+	PodIP              = "POD_IP"
+	Hostname           = "HOSTNAME"
+	TotalClusters      = "TOTAL_CLUSTERS"
+	Cluster            = "CLUSTER"
+	LookUpHost         = "LOOKUP_HOST"
+	MountPath          = "MOUNT_PATH"
+	ClusterHostPattern = "CLUSTER_HOST_PATTERN" // cluster-%d.kvstore.dev
+)
+
+const (
+	Port = "9090"
 )
 
 type (
@@ -46,22 +59,36 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	nodes := os.Getenv(Nodes)
-	log.Infof("TOTAL_NODES %s", nodes)
-	totalNodes, err := strconv.Atoi(nodes)
+	cluster, err := strconv.Atoi(os.Getenv(Cluster))
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Infof("CLUSTER: %d", cluster)
+	totalClustersStr := os.Getenv(TotalClusters)
+	totalClusters, err := strconv.Atoi(totalClustersStr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Infof("CLUSTERS: %d", totalClusters)
 	ip := os.Getenv(PodIP)
-	ctx := context.Background()
+	lookuphost := os.Getenv(LookUpHost)
+	log.Infof("LOOKUP_HOST: %s", lookuphost)
+	mountPath := os.Getenv(MountPath)
+	log.Infof("MOUNT_PATH: %s", mountPath)
+
+	clusterHostPattern := os.Getenv(ClusterHostPattern)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	store, err = distcluststore.NewStore(
 		ctx,
-		".",
+		mountPath,
 		distcluststore.ClusterConfig{
 			ID:                 id,
-			Nodes:              totalNodes,
-			Hostname:           "dstore.",
-			ClusterHostPattern: "",
+			TotalClusters:      totalClusters,
+			Cluster:            cluster,
+			LookupHost:         lookuphost,
+			ClusterHostPattern: clusterHostPattern,
 			IP:                 net.ParseIP(ip),
 			Port:               9987,
 			Forwards:           2,
@@ -70,12 +97,34 @@ func main() {
 	if err != nil {
 		log.Fatal("Err", "error", err)
 	}
-	http.HandleFunc("/v1/kv/update", HandleUpdate)
-	http.HandleFunc("/v1/kv/get/{key}", HandleGet)
+
+	sigch := make(chan os.Signal, 1)
+	signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)
+
+	mux := &http.ServeMux{}
+	mux.HandleFunc("/v1/kv/update", HandleUpdate)
+	mux.HandleFunc("/v1/kv/get/{key}", HandleGet)
 	log.Info("KV_SERVER_STARTING")
-	if err := http.ListenAndServe(":9090", nil); err != nil {
+	server := &http.Server{
+		Addr:    ":9090",
+		Handler: mux,
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			log.Info("RECV_CTX_DONE")
+		case <-sigch:
+			log.Info("RECV_SIGTERM")
+			ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			defer c()
+			server.Shutdown(ctx)
+			cancel()
+		}
+	}()
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+	log.Info("Shutting down server")
 }
 
 func HandleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +134,9 @@ func HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	req := UpdateRequest{}
 	json.Unmarshal(bytes, &req)
 	if red := store.GetRedirect(req.Key); red != "" {
-		http.Redirect(w, r, red, http.StatusFound) // 302 Found
+		url := fmt.Sprintf("http://%s:%s%s", red, Port, r.URL.Path) // Ensure correct concatenation
+		log.Info("Redirect", "url", url)
+		http.Redirect(w, r, url, http.StatusTemporaryRedirect) // Use 301 or 302 as needed
 		return
 	}
 	store.Set(req.Key, req.Value)
@@ -96,8 +147,9 @@ func HandleGet(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	log.Info("GET_RECV", "key", key)
 	if red := store.GetRedirect(key); red != "" {
-		log.Info("Redirect", "url", red)
-		http.Redirect(w, r, red, http.StatusFound) // 302 Found
+		url := fmt.Sprintf("http://%s:%s%s", red, Port, r.URL.Path) // Ensure correct concatenation
+		log.Info("Redirect", "url", url)
+		http.Redirect(w, r, url, http.StatusTemporaryRedirect) // Use 301 or 302 as needed
 		return
 	}
 	val, err := store.Get(key)

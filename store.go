@@ -52,7 +52,7 @@ func (w WALEntry) serialize(_ format) ([]byte, error) {
 
 type Store struct {
 	mu      *sync.RWMutex
-	m       map[string]string
+	store   map[string]string
 	wal     io.WriteCloser
 	wmu     *sync.Mutex
 	cluster *Cluster
@@ -74,12 +74,12 @@ func NewStore(
 		return nil, err
 	}
 	s := &Store{
-		mu:  &sync.RWMutex{},
-		m:   make(map[string]string),
-		wal: wal,
-		wmu: &sync.Mutex{},
+		mu:    &sync.RWMutex{},
+		store: make(map[string]string),
+		wal:   wal,
+		wmu:   &sync.Mutex{},
 	}
-	cluster, err := NewCluster(
+	cluster, syncdata, err := NewCluster(
 		ctx,
 		clusterCfg,
 		func(b []byte) {
@@ -87,7 +87,16 @@ func NewStore(
 			json.Unmarshal(b, &e)
 			s.set(e.Key, e.Val, e.Source)
 		},
+		func() []byte {
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+			bs, _ := json.Marshal(s.store)
+			return bs
+		},
 	)
+	if syncdata != nil {
+		json.Unmarshal(syncdata, &s.store)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +128,7 @@ func (s *Store) loadFromWAL(f *os.File) error {
 		if entry.Action != StartWrite {
 			continue
 		}
-		s.m[entry.Key] = entry.Val
+		s.store[entry.Key] = entry.Val
 	}
 	log.Info("FILE", "file", f)
 	return nil
@@ -169,7 +178,8 @@ func (s *Store) set(
 	if _, err := s.wal.Write(startBytes); err != nil {
 		return err
 	}
-	s.m[key] = val
+	log.Info("Setting value", "key", key, "value", val)
+	s.store[key] = val
 	finishEnt := WALEntry{
 		Action: FinishedWrite,
 		Key:    key,
@@ -192,7 +202,9 @@ func (s *Store) set(
 func (s *Store) Get(key string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.m[key], nil
+	val, ok := s.store[key]
+	log.Info("Getting Value", "key", key, "value", val, "ok", ok)
+	return s.store[key], nil
 }
 
 func (s *Store) Close() {

@@ -94,8 +94,9 @@ type Node struct {
 
 type ClusterConfig struct {
 	ID                 int
-	Nodes              int
-	Hostname           string
+	TotalClusters      int
+	Cluster            int
+	LookupHost         string
 	ClusterHostPattern string // Ex: "cluster-%d.gossip.default.svc.cluster.local:9090", %d will be replaced with ID
 	IP                 net.IP
 	Port               int
@@ -113,27 +114,35 @@ func (e Event) serialize(_ format) ([]byte, error) {
 	return json.Marshal(e)
 }
 
+type State struct {
+	State map[string]struct{} `json:"state,omitempty"`
+	Data  []byte              `json:"data,omitempty"`
+}
+
 type Cluster struct {
-	cfg         ClusterConfig
-	clock       HybridVecClock
-	nodes       []Node
-	msgcallback func([]byte)
-	state       map[string]struct{}
-	smu         *sync.RWMutex
-	nmu         *sync.RWMutex
-	client      *http.Client
-	info        Node
+	cfg            ClusterConfig
+	clock          HybridVecClock
+	nodes          []Node
+	msgcallback    func([]byte)
+	state          map[string]struct{}
+	smu            *sync.RWMutex
+	nmu            *sync.RWMutex
+	client         *http.Client
+	info           Node
+	getCurrentData func() []byte // Gets the store data payload to be sent to other nodes
 }
 
 func NewCluster(
 	ctx context.Context,
 	cfg ClusterConfig,
 	onmsgcallback func([]byte),
-) (*Cluster, error) {
+	getCurrentData func() []byte,
+) (*Cluster, []byte, error) {
+	log.Info("Creating cluster", "config", cfg)
 	c := &Cluster{
 		cfg: cfg,
 		clock: HybridVecClock{
-			Vec:       make([]uint64, cfg.Nodes),
+			Vec:       make([]uint64, cfg.TotalClusters),
 			Timestamp: time.Time{},
 			mu:        &sync.RWMutex{},
 		},
@@ -147,20 +156,20 @@ func NewCluster(
 			ID: cfg.ID,
 			IP: cfg.IP,
 		},
+		getCurrentData: getCurrentData,
 	}
 	if err := c.discoverNodes(); err != nil {
 		log.Error("ERR_DISCOVER_NODES", "error", err)
-		return nil, err
+		return nil, nil, err
 	}
-	if err := c.updateInitialState(); err != nil {
-		log.Error("ERR_UPDATE_INIT_STATE", "error", err)
-	}
+	payload := c.updateInitialState()
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		for {
 			select {
 			case <-ctx.Done():
 				log.Info("REFRESH_GO_ROUTINE", "msg", "exit")
+				return
 			case <-ticker.C:
 				c.discoverNodes()
 			}
@@ -168,7 +177,7 @@ func NewCluster(
 	}()
 	go c.startServer(ctx)
 	log.Info("CLUSTER_READY")
-	return c, nil
+	return c, payload, nil
 }
 
 func (c *Cluster) update(eTime time.Time, payload []byte) error {
@@ -177,6 +186,7 @@ func (c *Cluster) update(eTime time.Time, payload []byte) error {
 
 	ev := Event{
 		ID:      fmt.Sprintf("%d:%s", c.cfg.ID, xid.New().String()),
+		Source:  c.cfg.ID,
 		Clock:   c.clock.clone(),
 		Payload: payload,
 	}
@@ -207,7 +217,7 @@ func (c *Cluster) discoverNodes() error {
 	c.nmu.Lock()
 	defer c.nmu.Unlock()
 	nodes := make([]Node, 0, 10)
-	ips, err := net.LookupIP(c.cfg.Hostname)
+	ips, err := net.LookupIP(c.cfg.LookupHost)
 	if err != nil {
 		log.Errorf("Error %s", err)
 		// TODO: Return actual error
@@ -237,26 +247,34 @@ func (c *Cluster) discoverNodes() error {
 	c.nodes = nodes
 	return nil
 }
-func (c *Cluster) updateInitialState() error {
+
+func (c *Cluster) updateInitialState() []byte {
 	log.Info("Starting initial state update")
 	c.smu.Lock()
 	defer c.smu.Unlock()
-	if len(c.nodes) == 0 {
+	if len(c.nodes) == 0 || c.cfg.ID == 0 { // Either no other nodes or this is the first node
 		return nil
 	}
 	// Fetch state from previous node
 	n := c.cfg.ID - 1
-	s1, err := c.fetchState(c.nodes[n])
+	s, err := c.fetchState(c.nodes[n])
 	if err != nil {
 		log.Error("FETCH_STATE", "error", err)
+		s = &State{
+			State: map[string]struct{}{},
+			Data:  []byte{},
+		}
 	}
 
-	c.state = s1
+	c.state = s.State
 	log.Info("Initial state updated")
-	return nil
+	return s.Data
 }
 
-func (c *Cluster) fetchState(node Node) (map[string]struct{}, error) {
+func (c *Cluster) fetchState(node Node) (
+	*State,
+	error,
+) {
 	url := fmt.Sprintf("http://%s:%d"+V1StateRoute, node.IP.String(), c.cfg.Port)
 	res, err := c.client.Get(url)
 	if err != nil {
@@ -266,16 +284,25 @@ func (c *Cluster) fetchState(node Node) (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := make(map[string]struct{})
-	if err := json.Unmarshal(bytes, &state); err != nil {
+	log.Info("RECV_STATE", "state", string(bytes))
+	state := &State{}
+	if err := json.Unmarshal(bytes, state); err != nil {
 		return nil, err
+	}
+	if len(state.State) == 0 {
+		state.State = make(map[string]struct{})
 	}
 	return state, nil
 
 }
 
 func (c *Cluster) onmessage(ev Event) {
-	log.Info("EVENT_RECEIED", "event", ev)
+	log.Info(
+		"EVENT_RECEIED",
+		"event",
+		ev,
+	)
+	log.Info("EV_CLOCK_CMP", "mine", c.clock, "event", ev.Clock)
 	if _, ok := c.state[ev.ID]; ok || ev.Source == c.cfg.ID {
 		log.Info("EVENT_RECV_IGNORED", "event", ev, "reason", "duplicate")
 		return
@@ -288,7 +315,7 @@ func (c *Cluster) onmessage(ev Event) {
 		c.state[ev.ID] = struct{}{}
 		c.smu.Unlock()
 	default: // Event is older - ignore
-		log.Info("EVENT_RECV_IGNORED", "event", ev, "reason", "older event")
+		log.Info("EVENT_RECV_IGNORED_OLDER", "event", ev, "reason", "older event")
 		return
 	}
 	c.msgcallback(ev.Payload)
@@ -302,7 +329,7 @@ func (c *Cluster) forward(ev Event) {
 	c.nmu.RLock()
 	defer c.nmu.RUnlock()
 	bs, _ := ev.serialize(F_JSON)
-	nodes := rand.Perm(len(c.nodes))[:c.cfg.Forwards]
+	nodes := rand.Perm(len(c.nodes))[:min(len(c.nodes), c.cfg.Forwards)]
 	for _, i := range nodes {
 		node := c.nodes[i]
 		res, err := c.client.Post(
@@ -329,12 +356,14 @@ func (c *Cluster) forward(ev Event) {
 }
 
 func (c *Cluster) getCluster(key string) string {
-	n := hashModulo(key, c.cfg.Nodes)
-	log.Info("getCluster", "n", n, "id", c.cfg.ID)
-	if n == c.cfg.ID {
+	n := hashModulo(key, c.cfg.TotalClusters)
+	log.Info("getCluster", "expected", n, "cluster", c.cfg.Cluster)
+	if n == c.cfg.Cluster {
 		return ""
 	}
-	return fmt.Sprintf(c.cfg.ClusterHostPattern, n)
+	redirect := fmt.Sprintf(c.cfg.ClusterHostPattern, n)
+	log.Infof("REDIRECT TO: %s", redirect)
+	return redirect
 }
 
 func hashModulo(key string, N int) int {

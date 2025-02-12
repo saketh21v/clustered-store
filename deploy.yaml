@@ -1,14 +1,139 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: distcluststore-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+    - host: distcluststore.default.svc.cluster.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: distcluststore
+                port:
+                  number: 9090
+    - host: cluster-1.distcluststore.default.svc.cluster.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: distcluststore-0
+                port:
+                  number: 9090
+    - host: cluster-2.distcluststore.default.svc.cluster.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: distcluststore-1
+                port:
+                  number: 9090
+    - host: cluster-3.distcluststore.default.svc.cluster.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: distcluststore-2
+                port:
+                  number: 9090
+
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: distcluststore
 spec:
+  selector:
+    group: distcluststore # Ensure all StatefulSet pods have this label
+  ports:
+    - port: 9090
+      targetPort: 9090
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: distcluststore-0
+spec:
   clusterIP: None
   selector:
-    group: distcluststore
+    app: distcluststore-0
   ports:
-    - port: 8080
-      targetPort: 8080
+    - port: 9090
+      targetPort: 9090
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distcluststore-0
+spec:
+  serviceName:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distcluststore-0
+  template:
+    metadata:
+      labels:
+        app: distcluststore-0
+        group: distcluststore
+    spec:
+      containers:
+        - name: distcluststore-0
+          image: store_main:latest
+          ports:
+            - containerPort: 9090
+          env:
+            - name: TOTAL_CLUSTERS
+              value: "3"
+            - name: CLUSTER
+              value: "0"
+            - name: LOOKUP_HOST
+              value: "distcluststore-0.default.svc.cluster.local"
+            - name: CLUSTER_HOST_PATTERN
+              value: "distcluststore-%d.default.svc.cluster.local"
+            - name: MOUNT_PATH
+              value: /data
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          imagePullPolicy: Never
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"] # Each pod gets its own volume
+        resources:
+          requests:
+            storage: 50Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: distcluststore-1
+spec:
+  clusterIP: None
+  selector:
+    app: distcluststore-1
+  ports:
+    - port: 9090
+      targetPort: 9090
 
 ---
 apiVersion: apps/v1
@@ -33,8 +158,16 @@ spec:
           ports:
             - containerPort: 9090
           env:
-            - name: NODES
+            - name: TOTAL_CLUSTERS
               value: "3"
+            - name: CLUSTER
+              value: "1"
+            - name: LOOKUP_HOST
+              value: "distcluststore-1.default.svc.cluster.local"
+            - name: CLUSTER_HOST_PATTERN
+              value: "distcluststore-%d.default.svc.cluster.local"
+            - name: MOUNT_PATH
+              value: /data
             - name: POD_IP
               valueFrom:
                 fieldRef:
@@ -51,6 +184,19 @@ spec:
         resources:
           requests:
             storage: 50Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: distcluststore-2
+spec:
+  clusterIP: None
+  selector:
+    app: distcluststore-2
+  ports:
+    - port: 9090
+      targetPort: 9090
+
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -74,49 +220,16 @@ spec:
           ports:
             - containerPort: 9090
           env:
-            - name: NODES
+            - name: TOTAL_CLUSTERS
               value: "3"
-            - name: POD_IP
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.podIP
-          imagePullPolicy: Never
-          volumeMounts:
-            - name: data
-              mountPath: /data
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: ["ReadWriteOnce"] # Each pod gets its own volume
-        resources:
-          requests:
-            storage: 50Mi
----
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: distcluststore-3
-spec:
-  serviceName:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: distcluststore-3
-  template:
-    metadata:
-      labels:
-        app: distcluststore-3
-        group: distcluststore
-    spec:
-      containers:
-        - name: distcluststore
-          image: store_main:latest
-          ports:
-            - containerPort: 9090
-          env:
-            - name: NODES
-              value: "3"
+            - name: CLUSTER
+              value: "2"
+            - name: LOOKUP_HOST
+              value: "distcluststore-2.default.svc.cluster.local"
+            - name: CLUSTER_HOST_PATTERN
+              value: "distcluststore-%d.default.svc.cluster.local"
+            - name: MOUNT_PATH
+              value: /data
             - name: POD_IP
               valueFrom:
                 fieldRef:

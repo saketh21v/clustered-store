@@ -21,11 +21,10 @@ build:
 	GOOS=$(GOOS) GOARCH=$(GOARCH) @go build $(GOFLAGS) -o $(OUTPUT_DIR)/$(APP_NAME) .
 
 run-sample:
-	POD_IP=0.0.0.0 NODES=1 HOSTNAME=dis-gossip-0 go run cmd/main/main.go
-
+	@ POD_IP=0.0.0.0 CLUSTER=0 TOTAL_CLUSTERS=1 MOUNT_PATH=. CLUSTER_HOST_PATTERN="gossip-%d.svc.cluster.local" LOOKUP_HOST="gossip.svc.cluster.local" HOSTNAME="dis-gossip-1-0" go run cmd/main/main.go
 
 ## run-(bin): Runs the specified binary
-run-%:
+run-bin-%:
 	@go run "cmd/$*/main.go"
 
 
@@ -59,7 +58,7 @@ container-multiarch:
 
 ## cleanup-kube: Deletes stateful groups from kubernetes
 cleanup-kube:
-	@kubectl delete statefulset distcluststore-1 distcluststore-2 distcluststore-3 || true;
+	@kubectl delete statefulset distcluststore-0 distcluststore-1 distcluststore-2 || true;
 
 ## help: Show this help
 help:
@@ -67,5 +66,14 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@grep -E '^##' $(MAKEFILE_LIST) | sed 's/##//g' | column -s ':' -t
+
+
+## setup-kube-ingress: Sets up an nginx ingress
+setup-kube-ingress:
+	@kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+
+run-kube: cleanup-kube container
+	@kind load docker-image store_main:latest;
+	@kubectl apply -f deploy.yaml
 
 

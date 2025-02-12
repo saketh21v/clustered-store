@@ -19,13 +19,17 @@ func (c *Cluster) HandleInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Cluster) HandleState(w http.ResponseWriter, r *http.Request) {
-	state, err := json.Marshal(c.state)
+	state := &State{
+		State: c.state,
+		Data:  c.getCurrentData(),
+	}
+	bs, err := json.Marshal(state)
 	if err != nil {
 		w.WriteHeader(500)
 		return
 	}
 	w.Header().Add("Content-Type", "application/json")
-	w.Write(state)
+	w.Write(bs)
 }
 
 func (c *Cluster) HandleMessaage(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +49,6 @@ func (c *Cluster) HandleMessaage(w http.ResponseWriter, r *http.Request) {
 		log.Info("DUPLICATE", "msg", ev)
 		return
 	}
-
+	w.WriteHeader(200)
 	c.onmessage(ev)
 }
