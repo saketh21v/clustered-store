@@ -2,6 +2,7 @@ package distcluststore
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -59,6 +60,7 @@ type Store struct {
 }
 
 func NewStore(
+	ctx context.Context,
 	mnt string, // Perisistent Volume mount path
 	clusterCfg ClusterConfig,
 ) (*Store, error) {
@@ -78,6 +80,7 @@ func NewStore(
 		wmu: &sync.Mutex{},
 	}
 	cluster, err := NewCluster(
+		ctx,
 		clusterCfg,
 		func(b []byte) {
 			e := WALEntry{}
@@ -138,7 +141,7 @@ func (s *Store) Set(key string, val string) error {
 	if err != nil {
 		return err
 	}
-	return s.cluster.propagate(now, finishBytes)
+	return s.cluster.update(now, finishBytes)
 }
 
 func (s *Store) set(

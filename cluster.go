@@ -1,6 +1,8 @@
 package distcluststore
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -8,11 +10,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/rs/xid"
+	"golang.org/x/exp/rand"
 )
 
 // Route
@@ -30,15 +34,6 @@ const (
 	CmpLt
 )
 
-type ClusterConfig struct {
-	ID                 int
-	Nodes              int
-	Hostname           string
-	ClusterHostPattern string // Ex: "cluster-%d.gossip.default.svc.cluster.local:9090", %d will be replaced with ID
-	IP                 net.IP
-	Port               int
-}
-
 type HybridVecClock struct {
 	Vec []uint64 `json:"vec,omitempty"`
 	// Timestamp isn't going to be precise, but works for now. Used for conflict resolution
@@ -46,52 +41,23 @@ type HybridVecClock struct {
 	mu        *sync.RWMutex
 }
 
-type Node struct {
-	ID int
-	IP net.IP
-}
-
-type Cluster struct {
-	cfg         ClusterConfig
-	clock       HybridVecClock
-	nodes       []Node
-	msgcallback func([]byte)
-	state       map[string]struct{}
-	smu         *sync.Mutex
-	nmu         *sync.Mutex
-	client      *http.Client
-}
-
-type Event struct {
-	ID      string         `json:"id"` // node.ID + xid
-	Source  int            `json:"source"`
-	Clock   HybridVecClock `json:"clock,omitempty"`
-	Payload []byte         `json:"payload,omitempty"`
-}
-
-func NewCluster(
-	cfg ClusterConfig,
-	onmsgcallback func([]byte),
-) (*Cluster, error) {
-	c := &Cluster{
-		cfg: cfg,
-		clock: HybridVecClock{
-			Vec:       make([]uint64, cfg.Nodes),
-			Timestamp: time.Time{},
-			mu:        &sync.RWMutex{},
-		},
-		msgcallback: onmsgcallback,
-		nodes:       make([]Node, 0, 10),
-		state:       make(map[string]struct{}),
-		smu:         &sync.Mutex{},
-		nmu:         &sync.Mutex{},
-		client:      &http.Client{},
+func (c *HybridVecClock) merge(clk HybridVecClock) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range len(c.Vec) {
+		c.Vec[i] = max(c.Vec[i], clk.Vec[i])
 	}
-	if err := c.discoverNodes(); err != nil {
-		log.Error("ERR_DISCOVER_NODES", "error", err)
-		return nil, err
+}
+
+func (c *HybridVecClock) clone() HybridVecClock {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	clk := HybridVecClock{
+		Vec:       make([]uint64, len(c.Vec)),
+		Timestamp: c.Timestamp,
 	}
-	return c, nil
+	copy(clk.Vec, c.Vec)
+	return clk
 }
 
 func (c HybridVecClock) compare(clk HybridVecClock) ClockCmp {
@@ -121,26 +87,90 @@ func (c HybridVecClock) compare(clk HybridVecClock) ClockCmp {
 	}
 }
 
-func (c *HybridVecClock) merge(clk HybridVecClock) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for i := range len(c.Vec) {
-		c.Vec[i] = max(c.Vec[i], clk.Vec[i])
-	}
+type Node struct {
+	ID int
+	IP net.IP
 }
 
-func (c *HybridVecClock) clone() HybridVecClock {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	clk := HybridVecClock{
-		Vec:       make([]uint64, len(c.Vec)),
-		Timestamp: c.Timestamp,
-	}
-	copy(clk.Vec, c.Vec)
-	return clk
+type ClusterConfig struct {
+	ID                 int
+	Nodes              int
+	Hostname           string
+	ClusterHostPattern string // Ex: "cluster-%d.gossip.default.svc.cluster.local:9090", %d will be replaced with ID
+	IP                 net.IP
+	Port               int
+	Forwards           int // Number of nodes to forward the event to
 }
 
-func (c *Cluster) propagate(eTime time.Time, payload []byte) error {
+type Event struct {
+	ID      string         `json:"id"` // node.ID + xid
+	Source  int            `json:"source"`
+	Clock   HybridVecClock `json:"clock,omitempty"`
+	Payload []byte         `json:"payload,omitempty"`
+}
+
+func (e Event) serialize(_ format) ([]byte, error) {
+	return json.Marshal(e)
+}
+
+type Cluster struct {
+	cfg         ClusterConfig
+	clock       HybridVecClock
+	nodes       []Node
+	msgcallback func([]byte)
+	state       map[string]struct{}
+	smu         *sync.RWMutex
+	nmu         *sync.RWMutex
+	client      *http.Client
+	info        Node
+}
+
+func NewCluster(
+	ctx context.Context,
+	cfg ClusterConfig,
+	onmsgcallback func([]byte),
+) (*Cluster, error) {
+	c := &Cluster{
+		cfg: cfg,
+		clock: HybridVecClock{
+			Vec:       make([]uint64, cfg.Nodes),
+			Timestamp: time.Time{},
+			mu:        &sync.RWMutex{},
+		},
+		msgcallback: onmsgcallback,
+		nodes:       make([]Node, 0, 10),
+		state:       make(map[string]struct{}),
+		smu:         &sync.RWMutex{},
+		nmu:         &sync.RWMutex{},
+		client:      &http.Client{},
+		info: Node{
+			ID: cfg.ID,
+			IP: cfg.IP,
+		},
+	}
+	if err := c.discoverNodes(); err != nil {
+		log.Error("ERR_DISCOVER_NODES", "error", err)
+		return nil, err
+	}
+	if err := c.updateInitialState(); err != nil {
+		log.Error("ERR_UPDATE_INIT_STATE", "error", err)
+	}
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		for {
+			select {
+			case <-ctx.Done():
+				log.Info("REFRESH_GO_ROUTINE", "msg", "exit")
+			case <-ticker.C:
+				c.discoverNodes()
+			}
+		}
+	}()
+	go c.startServer(ctx)
+	return c, nil
+}
+
+func (c *Cluster) update(eTime time.Time, payload []byte) error {
 	c.clock.Vec[c.cfg.ID] += 1
 	c.clock.Timestamp = eTime
 
@@ -150,8 +180,26 @@ func (c *Cluster) propagate(eTime time.Time, payload []byte) error {
 		Payload: payload,
 	}
 	log.Info("EVENT_GENERATED", "event", ev)
-	// TODO: @saketh - propagate
+	c.smu.Lock()
+	c.state[ev.ID] = struct{}{}
+	c.smu.Unlock()
+	c.forward(ev)
 	return nil
+}
+
+func (c *Cluster) startServer(ctx context.Context) {
+	s := http.NewServeMux()
+	s.HandleFunc(V1InfoRoute, c.HandleInfo)
+	s.HandleFunc(V1PostMessage, c.HandleMessaage)
+	s.HandleFunc(V1StateRoute, c.HandleState)
+	sv := http.Server{
+		Addr:    "0.0.0.0:" + strconv.Itoa(c.cfg.Port),
+		Handler: s,
+		BaseContext: func(l net.Listener) context.Context {
+			return ctx
+		},
+	}
+	sv.ListenAndServe()
 }
 
 func (c *Cluster) discoverNodes() error {
@@ -161,7 +209,8 @@ func (c *Cluster) discoverNodes() error {
 	ips, err := net.LookupIP(c.cfg.Hostname)
 	if err != nil {
 		log.Errorf("Error %s", err)
-		return err
+		// TODO: Return actual error
+		return nil
 	}
 	for _, ip := range ips {
 		if ip.String() == c.cfg.IP.String() {
@@ -194,9 +243,9 @@ func (c *Cluster) updateInitialState() error {
 	if len(c.nodes) == 0 {
 		return nil
 	}
-	// Fetch state from one random node
-	node1 := rand.Intn(len(c.nodes))
-	s1, err := c.fetchState(c.nodes[node1])
+	// Fetch state from previous node
+	n := c.cfg.ID - 1
+	s1, err := c.fetchState(c.nodes[n])
 	if err != nil {
 		log.Error("FETCH_STATE", "error", err)
 	}
@@ -224,21 +273,58 @@ func (c *Cluster) fetchState(node Node) (map[string]struct{}, error) {
 
 }
 
-func (c *Cluster) onmessage(e Event) {
-	log.Info("EVENT_RECEIED", "event", e)
-	if _, ok := c.state[e.ID]; ok || e.Source == c.cfg.ID {
-		log.Info("EVENT_RECV_IGNORED", "event", e, "reason", "duplicate")
+func (c *Cluster) onmessage(ev Event) {
+	log.Info("EVENT_RECEIED", "event", ev)
+	if _, ok := c.state[ev.ID]; ok || ev.Source == c.cfg.ID {
+		log.Info("EVENT_RECV_IGNORED", "event", ev, "reason", "duplicate")
 		return
 	}
 	// Compare clocks
-	switch c.clock.compare(e.Clock) {
+	switch c.clock.compare(ev.Clock) {
 	case CmpGt: // Event is the latest
-		c.clock.merge(e.Clock)
+		c.clock.merge(ev.Clock)
+		c.smu.Lock()
+		c.state[ev.ID] = struct{}{}
+		c.smu.Unlock()
 	default: // Event is older - ignore
-		log.Info("EVENT_RECV_IGNORED", "event", e, "reason", "older event")
+		log.Info("EVENT_RECV_IGNORED", "event", ev, "reason", "older event")
 		return
 	}
-	c.msgcallback(e.Payload)
+	c.msgcallback(ev.Payload)
+	c.forward(ev)
+}
+
+func (c *Cluster) forward(ev Event) {
+	if len(c.nodes) == 0 {
+		return
+	}
+	c.nmu.RLock()
+	defer c.nmu.RUnlock()
+	bs, _ := ev.serialize(F_JSON)
+	nodes := rand.Perm(len(c.nodes))[:c.cfg.Forwards]
+	for _, i := range nodes {
+		node := c.nodes[i]
+		res, err := c.client.Post(
+			fmt.Sprintf(
+				"http://%s:%d"+V1PostMessage,
+				node.IP.String(),
+				c.cfg.Port,
+			),
+			"application/json",
+			bytes.NewReader(bs),
+		)
+		if err != nil || (res != nil && res.StatusCode != 200) {
+			log.Error(
+				"ERROR_FORWARD",
+				"node",
+				node,
+				"error",
+				err,
+				"status_code",
+				Zeroed(res).StatusCode,
+			)
+		}
+	}
 }
 
 func (c *Cluster) getCluster(key string) string {
