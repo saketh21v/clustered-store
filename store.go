@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -45,6 +46,10 @@ func NewStore(
 	mnt string, // Perisistent Volume mount path
 	clusterCfg ClusterConfig,
 ) (*Store, error) {
+	walpath := mnt + WALFilePath
+	if err := os.MkdirAll(filepath.Dir(walpath), 0755); err != nil {
+		return nil, err
+	}
 	// Read the WAL if present
 	wal, err := os.OpenFile(mnt+WALFilePath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
