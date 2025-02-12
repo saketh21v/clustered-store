@@ -9,7 +9,15 @@ import (
 )
 
 func main() {
-	s, err := distcluststore.NewStore()
+	s, err := distcluststore.NewStore(
+		".",
+		distcluststore.ClusterConfig{
+			ID:                 0,
+			Nodes:              1,
+			Hostname:           "",
+			ClusterHostPattern: "",
+		},
+	)
 	if err != nil {
 		log.Fatal("Err", "error", err)
 	}

@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	WALFilePath = "/Users/zeaf/dev/dist-clust-store/wal.jsonl"
-	// WALFilePath = "/var/distcluststore/wal.jsonl"
+	// WALFilePath = "/Users/zeaf/dev/dist-clust-store/wal.jsonl"
+	WALFilePath = "/.store/wal.jsonl"
 )
 
 type Action uint
@@ -29,37 +29,45 @@ type WALEntry struct {
 	Key    string    `json:"key,omitempty"`
 	Val    string    `json:"val,omitempty"` // Let's start with string, we can move to bytes or nested maps later
 	Time   time.Time `json:"time,omitempty"`
+	Source int       `json:"source,omitempty"`
 }
 
 type Store struct {
-	mu     *sync.RWMutex
-	m      map[string]string
-	wal    io.WriteCloser
-	wmu    *sync.Mutex
-	gossip *Cluster
+	mu      *sync.RWMutex
+	m       map[string]string
+	wal     io.WriteCloser
+	wmu     *sync.Mutex
+	cluster *Cluster
+	id      int
 }
 
-func NewStore() (*Store, error) {
+func NewStore(
+	mnt string, // Perisistent Volume mount path
+	clusterCfg ClusterConfig,
+) (*Store, error) {
 	// Read the WAL if present
-	wal, err := os.OpenFile(WALFilePath, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		return nil, err
-	}
-	cluster, err := NewCluster(ClusterConfig{
-		ID:                 0,
-		Nodes:              1,
-		ClusterHostPattern: "",
-	})
+	wal, err := os.OpenFile(mnt+WALFilePath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, err
 	}
 	s := &Store{
-		mu:     &sync.RWMutex{},
-		m:      make(map[string]string),
-		wal:    wal,
-		wmu:    &sync.Mutex{},
-		gossip: cluster,
+		mu:  &sync.RWMutex{},
+		m:   make(map[string]string),
+		wal: wal,
+		wmu: &sync.Mutex{},
 	}
+	cluster, err := NewCluster(
+		clusterCfg,
+		func(b []byte) {
+			e := WALEntry{}
+			json.Unmarshal(b, &e)
+			s.set(e.Key, e.Val, e.Source)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	s.cluster = cluster
 	if err := s.loadFromWAL(wal); err != nil {
 		return nil, err
 	}
@@ -95,48 +103,67 @@ func (s *Store) loadFromWAL(f *os.File) error {
 
 func (s *Store) Set(key string, val string) error {
 	now := time.Now()
-	var startBytes, finishBytes []byte
-	err := func() (err error) { // Stupid golang doesn't have block scoped defers
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		startBytes, err = json.Marshal(WALEntry{
-			Action: StartWrite,
-			Key:    key,
-			Val:    val,
-			Time:   time.Now(),
-		})
-		if err != nil {
-			return err
-		}
-		startBytes = append(startBytes, []byte("\n")...)
-		finishBytes, err = json.Marshal(WALEntry{
-			Action: FinishedWrite,
-			Key:    key,
-			Val:    val,
-			Time:   time.Now(),
-		})
-		if err != nil {
-			return err
-		}
-		finishBytes = append(finishBytes, []byte("\n")...)
-
-		s.wmu.Lock()
-		defer s.wmu.Unlock()
-		if _, err := s.wal.Write(startBytes); err != nil {
-			return err
-		}
-		s.m[key] = val
-		if _, err := s.wal.Write(finishBytes); err != nil {
-			// Don't return error to allow propagation to other nodes
-			log.Error("FINISH_WAL_ERR", "error", err)
-		}
-		return nil
-	}()
+	err := s.set(key, val, s.id)
 	if err != nil {
 		return err
 	}
-	if err := s.gossip.propagate(now, finishBytes); err != nil {
+	finishBytes, err := json.Marshal(WALEntry{
+		Action: FinishedWrite,
+		Key:    key,
+		Val:    val,
+		Time:   now,
+		Source: s.id,
+	})
+	if err != nil {
 		return err
+	}
+	if err := s.cluster.propagate(now, finishBytes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) set(
+	key string,
+	val string,
+	source int,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	startEnt := WALEntry{
+		Action: StartWrite,
+		Key:    key,
+		Val:    val,
+		Time:   time.Now(),
+		Source: source,
+	}
+	startBytes, err := json.Marshal(startEnt)
+	if err != nil {
+		return err
+	}
+	startBytes = append(startBytes, []byte("\n")...)
+
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if _, err := s.wal.Write(startBytes); err != nil {
+		return err
+	}
+	s.m[key] = val
+	finishEnt := WALEntry{
+		Action: FinishedWrite,
+		Key:    key,
+		Val:    val,
+		Time:   time.Now(),
+		Source: source,
+	}
+	finishBytes, err := json.Marshal(finishEnt)
+	if err != nil {
+		return err
+	}
+	finishBytes = append(finishBytes, []byte("\n")...)
+	if _, err := s.wal.Write(finishBytes); err != nil {
+		// Don't return error to allow propagation to other nodes
+		log.Error("FINISH_WAL_ERR", "error", err)
 	}
 	return nil
 }
@@ -149,4 +176,8 @@ func (s *Store) Get(key string) (string, error) {
 
 func (s *Store) Close() {
 	s.wal.Close()
+}
+
+func (s *Store) GetRedirect(key string) string {
+	return s.cluster.getCluster(key)
 }
