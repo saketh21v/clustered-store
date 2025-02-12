@@ -59,6 +59,7 @@ func NewCluster(
 		clock: HybridVecClock{
 			Vec:       make([]uint64, cfg.Nodes),
 			Timestamp: time.Time{},
+			mu:        &sync.RWMutex{},
 		},
 		nodes: make([]Node, 0, 10),
 		seen:  make(map[string]struct{}),
@@ -72,7 +73,7 @@ func NewCluster(
 	return c, nil
 }
 
-func (c *Cluster) propagate(eTime time.Time, payload []byte) {
+func (c *Cluster) propagate(eTime time.Time, payload []byte) error {
 	c.clock.Vec[c.cfg.ID] += 1
 	c.clock.Timestamp = eTime
 
@@ -83,6 +84,7 @@ func (c *Cluster) propagate(eTime time.Time, payload []byte) {
 	}
 	log.Info("EVENT_GENERATED", "event", ev)
 	// TODO: @saketh - propagate
+	return nil
 }
 
 func (c *Cluster) discoverNodes() error {
@@ -138,7 +140,7 @@ func (c *HybridVecClock) merge(clk HybridVecClock) {}
 
 func (c *HybridVecClock) clone() HybridVecClock {
 	c.mu.RLock()
-	defer c.mu.Unlock()
+	defer c.mu.RUnlock()
 	clk := HybridVecClock{
 		Vec:       make([]uint64, len(c.Vec)),
 		Timestamp: c.Timestamp,
