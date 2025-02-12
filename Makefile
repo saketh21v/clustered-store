@@ -20,6 +20,9 @@ build:
 	@mkdir -p $(OUTPUT_DIR)
 	GOOS=$(GOOS) GOARCH=$(GOARCH) @go build $(GOFLAGS) -o $(OUTPUT_DIR)/$(APP_NAME) .
 
+run-sample:
+	POD_IP=0.0.0.0 TOTAL_NODES=1 HOSTNAME=gossip-0 go run cmd/main/main.go
+
 
 ## run-(bin): Runs the specified binary
 run-%:
@@ -53,6 +56,10 @@ container-multiarch:
 		--platform $(PLATFORMS) \
 		-t $(DOCKER_IMAGE_PRE)_$$bin:$(VERSION) . ; \
 		done
+
+## cleanup-kube: Deletes stateful groups from kubernetes
+cleanup-kube:
+	@kubectl delete statefulset distcluststore-1 distcluststore-2 distcluststore-3 || true;
 
 ## help: Show this help
 help:

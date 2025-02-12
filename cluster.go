@@ -329,6 +329,7 @@ func (c *Cluster) forward(ev Event) {
 
 func (c *Cluster) getCluster(key string) string {
 	n := hashModulo(key, c.cfg.Nodes)
+	log.Info("getCluster", "n", n, "id", c.cfg.ID)
 	if n == c.cfg.ID {
 		return ""
 	}

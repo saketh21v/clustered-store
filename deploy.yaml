@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: distcluststore
+spec:
+  clusterIP: None
+  selector:
+    group: distcluststore
+  ports:
+    - port: 8080
+      targetPort: 8080
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distcluststore-1
+spec:
+  serviceName:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distcluststore-1
+  template:
+    metadata:
+      labels:
+        app: distcluststore-1
+        group: distcluststore
+    spec:
+      containers:
+        - name: distcluststore
+          image: store_main:latest
+          ports:
+            - containerPort: 9090
+          env:
+            - name: TOTAL_NODES
+              value: "3"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          imagePullPolicy: Never
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"] # Each pod gets its own volume
+        resources:
+          requests:
+            storage: 50Mi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distcluststore-2
+spec:
+  serviceName:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distcluststore-2
+  template:
+    metadata:
+      labels:
+        app: distcluststore-2
+        group: distcluststore
+    spec:
+      containers:
+        - name: distcluststore
+          image: store_main:latest
+          ports:
+            - containerPort: 9090
+          env:
+            - name: TOTAL_NODES
+              value: "3"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          imagePullPolicy: Never
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"] # Each pod gets its own volume
+        resources:
+          requests:
+            storage: 50Mi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distcluststore-3
+spec:
+  serviceName:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distcluststore-3
+  template:
+    metadata:
+      labels:
+        app: distcluststore-3
+        group: distcluststore
+    spec:
+      containers:
+        - name: distcluststore
+          image: store_main:latest
+          ports:
+            - containerPort: 9090
+          env:
+            - name: TOTAL_NODES
+              value: "3"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          imagePullPolicy: Never
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"] # Each pod gets its own volume
+        resources:
+          requests:
+            storage: 50Mi
