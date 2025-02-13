@@ -14,13 +14,19 @@ Implementing a Distributed clustered key-value store for learning clocks and con
 - Persistent
 
 # Usage
-`make container` 
+Build image: `make container` 
 
-`make run-kube`
+Run on kubernetes: `make run-kube`
+
+## Kubernetes setup
+Install `docker` or `podman` and `kind`
+
+Run `kind create cluster`
 
 ## Examples
 
-Run inside a container on
+Run inside a container
+
 `curl -L distcluststore.default.svc.cluster.local:9090/v1/kv/get/k900`
 
 `curl -L -X POST distcluststore.default.svc.cluster.local:9090/v1/kv/update --data-raw '{"key":"k1", "value":"v1"}'`
