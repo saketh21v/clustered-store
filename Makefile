@@ -68,12 +68,7 @@ help:
 	@grep -E '^##' $(MAKEFILE_LIST) | sed 's/##//g' | column -s ':' -t
 
 
-## setup-kube-ingress: Sets up an nginx ingress
-setup-kube-ingress:
-	@kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
-
 run-kube: cleanup-kube container
 	@kind load docker-image store_main:latest;
 	@kubectl apply -f deploy.yaml
-
 

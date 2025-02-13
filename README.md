@@ -1,7 +1,9 @@
 # Distributed Clustered Store
+
 Implementing a Distributed clustered key-value store for learning clocks and concensus
 
 # Requirements/Limitations
+
 - Partially Horizontally scalable - pods per cluster can be increased
     - Resizing clusters is not a goal at this point
 - Highly read available at cluster level
@@ -12,9 +14,13 @@ Implementing a Distributed clustered key-value store for learning clocks and con
 - Persistent
 
 # Usage
-`make container`
-`kubectl apply -f deploy.yaml`
+`make container` 
+
+`make run-kube`
 
 ## Examples
-`http --follow distcluststore.default.svc.cluster.local:9090/v1/kv/get/k900`
-`http --follow POST distcluststore.default.svc.cluster.local:9090/v1/kv/update key=k900 val=90`
+
+Run inside a container on
+`curl -L distcluststore.default.svc.cluster.local:9090/v1/kv/get/k900`
+
+`curl -L -X POST distcluststore.default.svc.cluster.local:9090/v1/kv/update --data-raw '{"key":"k1", "value":"v1"}'`
