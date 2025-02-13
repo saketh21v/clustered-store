@@ -80,7 +80,7 @@ metadata:
   name: distcluststore-0
 spec:
   serviceName:
-  replicas: 3
+  replicas: 5
   selector:
     matchLabels:
       app: distcluststore-0
@@ -106,6 +106,8 @@ spec:
               value: "distcluststore-%d.default.svc.cluster.local"
             - name: MOUNT_PATH
               value: /data
+            - name: NODES_PER_CLUSTER
+              value: "10"
             - name: POD_IP
               valueFrom:
                 fieldRef:
@@ -142,7 +144,7 @@ metadata:
   name: distcluststore-1
 spec:
   serviceName:
-  replicas: 3
+  replicas: 5
   selector:
     matchLabels:
       app: distcluststore-1
@@ -168,6 +170,8 @@ spec:
               value: "distcluststore-%d.default.svc.cluster.local"
             - name: MOUNT_PATH
               value: /data
+            - name: NODES_PER_CLUSTER
+              value: "10"
             - name: POD_IP
               valueFrom:
                 fieldRef:
@@ -204,7 +208,7 @@ metadata:
   name: distcluststore-2
 spec:
   serviceName:
-  replicas: 3
+  replicas: 5
   selector:
     matchLabels:
       app: distcluststore-2
@@ -230,6 +234,8 @@ spec:
               value: "distcluststore-%d.default.svc.cluster.local"
             - name: MOUNT_PATH
               value: /data
+            - name: NODES_PER_CLUSTER
+              value: "10"
             - name: POD_IP
               valueFrom:
                 fieldRef:

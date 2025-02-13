@@ -24,6 +24,7 @@ const (
 	PodIP              = "POD_IP"
 	Hostname           = "HOSTNAME"
 	TotalClusters      = "TOTAL_CLUSTERS"
+	NodesPerCluster    = "NODES_PER_CLUSTER"
 	Cluster            = "CLUSTER"
 	LookUpHost         = "LOOKUP_HOST"
 	MountPath          = "MOUNT_PATH"
@@ -69,6 +70,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	nodesPerClusterStr := os.Getenv(NodesPerCluster)
+	nodesPerCluster, err := strconv.Atoi(nodesPerClusterStr)
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Infof("CLUSTERS: %d", totalClusters)
 	ip := os.Getenv(PodIP)
 	lookuphost := os.Getenv(LookUpHost)
@@ -86,12 +92,13 @@ func main() {
 		distcluststore.ClusterConfig{
 			ID:                 id,
 			TotalClusters:      totalClusters,
+			NodesPerCluster:    nodesPerCluster,
 			Cluster:            cluster,
 			LookupHost:         lookuphost,
 			ClusterHostPattern: clusterHostPattern,
 			IP:                 net.ParseIP(ip),
 			Port:               9987,
-			Forwards:           2,
+			Forwards:           3,
 		},
 	)
 	if err != nil {

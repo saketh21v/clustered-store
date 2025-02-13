@@ -203,7 +203,7 @@ func (s *Store) Get(key string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	val, ok := s.store[key]
-	log.Info("Getting Value", "key", key, "value", val, "ok", ok)
+	log.Info("Getting Value", "key", key, "value", val, "ok", ok, "state", s.cluster.clock.Vec)
 	return s.store[key], nil
 }
 

@@ -95,6 +95,7 @@ type Node struct {
 type ClusterConfig struct {
 	ID                 int
 	TotalClusters      int
+	NodesPerCluster    int
 	Cluster            int
 	LookupHost         string
 	ClusterHostPattern string // Ex: "cluster-%d.gossip.default.svc.cluster.local:9090", %d will be replaced with ID
@@ -106,6 +107,7 @@ type ClusterConfig struct {
 type Event struct {
 	ID      string         `json:"id"` // node.ID + xid
 	Source  int            `json:"source"`
+	From    int            `json:"from"`
 	Clock   HybridVecClock `json:"clock,omitempty"`
 	Payload []byte         `json:"payload,omitempty"`
 }
@@ -142,7 +144,7 @@ func NewCluster(
 	c := &Cluster{
 		cfg: cfg,
 		clock: HybridVecClock{
-			Vec:       make([]uint64, cfg.TotalClusters),
+			Vec:       make([]uint64, cfg.NodesPerCluster),
 			Timestamp: time.Time{},
 			mu:        &sync.RWMutex{},
 		},
@@ -187,6 +189,7 @@ func (c *Cluster) update(eTime time.Time, payload []byte) error {
 	ev := Event{
 		ID:      fmt.Sprintf("%d:%s", c.cfg.ID, xid.New().String()),
 		Source:  c.cfg.ID,
+		From:    c.cfg.ID,
 		Clock:   c.clock.clone(),
 		Payload: payload,
 	}
@@ -328,10 +331,15 @@ func (c *Cluster) forward(ev Event) {
 	}
 	c.nmu.RLock()
 	defer c.nmu.RUnlock()
+	from := ev.From
+	ev.From = c.cfg.ID
 	bs, _ := ev.serialize(F_JSON)
 	nodes := rand.Perm(len(c.nodes))[:min(len(c.nodes), c.cfg.Forwards)]
 	for _, i := range nodes {
 		node := c.nodes[i]
+		if node.ID == from {
+			continue
+		}
 		res, err := c.client.Post(
 			fmt.Sprintf(
 				"http://%s:%d"+V1PostMessage,
