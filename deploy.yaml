@@ -80,7 +80,7 @@ metadata:
   name: distcluststore-0
 spec:
   serviceName:
-  replicas: 5
+  replicas: 10
   selector:
     matchLabels:
       app: distcluststore-0
@@ -144,7 +144,7 @@ metadata:
   name: distcluststore-1
 spec:
   serviceName:
-  replicas: 5
+  replicas: 10
   selector:
     matchLabels:
       app: distcluststore-1
@@ -208,7 +208,7 @@ metadata:
   name: distcluststore-2
 spec:
   serviceName:
-  replicas: 5
+  replicas: 10
   selector:
     matchLabels:
       app: distcluststore-2

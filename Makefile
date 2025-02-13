@@ -21,7 +21,7 @@ build:
 	GOOS=$(GOOS) GOARCH=$(GOARCH) @go build $(GOFLAGS) -o $(OUTPUT_DIR)/$(APP_NAME) .
 
 run-sample:
-	@ POD_IP=0.0.0.0 CLUSTER=0 TOTAL_CLUSTERS=1 MOUNT_PATH=. CLUSTER_HOST_PATTERN="gossip-%d.svc.cluster.local" LOOKUP_HOST="gossip.svc.cluster.local" HOSTNAME="dis-gossip-1-0" go run cmd/main/main.go
+	@ POD_IP=0.0.0.0 CLUSTER=0 TOTAL_CLUSTERS=1 NODES_PER_CLUSTER=3 MOUNT_PATH=. CLUSTER_HOST_PATTERN="gossip-%d.svc.cluster.local" LOOKUP_HOST="gossip.svc.cluster.local" HOSTNAME="dis-gossip-1-0" go run cmd/main/main.go
 
 ## run-(bin): Runs the specified binary
 run-bin-%:
